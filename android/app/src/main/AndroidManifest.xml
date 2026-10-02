@@ -6,7 +6,7 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
     <application
-        android:label="abooks_maker"
+        android:label="Abooks Maker"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
