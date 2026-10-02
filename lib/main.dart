@@ -1199,10 +1199,30 @@ class ConversionJob {
               ),
             )
             .toList();
+        final recoveredChapters = chapters.length == 1
+            ? BookParser.splitLongChapterText(chapters.first.text)
+            : const <BookChapter>[];
+        final sourceChapters = recoveredChapters.length >= 2
+            ? recoveredChapters
+            : chapters;
+        final cleanedChapters = sourceChapters.length > 1
+            ? sourceChapters.where((chapter) {
+                final lowerTitle = chapter.title.toLowerCase();
+                final chapterSignals = RegExp(
+                  r'第\s*(?:\d+|[一二三四五六七八九十百千万]+)\s*章',
+                ).allMatches(chapter.text).length;
+                final looksLikeContents =
+                    chapterSignals >= 8 &&
+                    (lowerTitle.contains('版权') ||
+                        lowerTitle.contains('目录') ||
+                        chapter.text.length > 15000);
+                return !looksLikeContents;
+              }).toList()
+            : chapters;
         document = BookDocument(
           title: documentJson['title'] as String,
           format: BookFormat.values.byName(documentJson['format'] as String),
-          chapters: chapters,
+          chapters: cleanedChapters.isEmpty ? sourceChapters : cleanedChapters,
         );
       }
       final statusName = json['status'] as String? ?? JobStatus.ready.name;

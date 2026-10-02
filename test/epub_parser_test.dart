@@ -7,6 +7,24 @@ import 'package:abooks_maker/core/models/book_document.dart';
 import 'package:abooks_maker/core/parsers/book_parser.dart';
 
 void main() {
+  test('splits a long single-document EPUB into chapter sections', () {
+    final text = '''版权信息
+第 1 章 火种
+第一章正文。
+第 2 章 旅程
+第二章正文。
+第 3 章 未来
+第三章正文。''';
+
+    final chapters = BookParser.splitLongChapterText(text);
+
+    expect(chapters.map((chapter) => chapter.title), [
+      '第 1 章 火种',
+      '第 2 章 旅程',
+      '第 3 章 未来',
+    ]);
+  });
+
   test('parses an EPUB using OPF spine order and strips HTML', () async {
     final archive = Archive()
       ..addFile(

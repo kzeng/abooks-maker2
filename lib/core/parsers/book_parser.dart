@@ -75,6 +75,11 @@ class BookParser {
       final text = _cleanText(document.body?.text ?? document.text ?? '');
       if (text.isEmpty) continue;
       final heading = document.querySelector('h1, h2, h3')?.text.trim();
+      final splitChapters = BookParser.splitLongChapterText(text);
+      if (text.length > 20000 && splitChapters.length >= 2) {
+        chapters.addAll(splitChapters);
+        continue;
+      }
       if (_shouldSkipChapter(path, text, heading: heading)) continue;
       final chapterText = chapters.isEmpty ? _removeFrontMatter(text) : text;
       if (chapterText.isEmpty) continue;
@@ -152,11 +157,10 @@ class BookParser {
       r'第\s*(?:\d+|[一二三四五六七八九十百千万]+)\s*章',
     ).allMatches(text).length;
     final looksLikeContents =
-        text.length < 15000 &&
-        chapterSignals >= 3 &&
-        (lowerText.contains('目录') ||
-            lowerHeading.contains('目录') ||
-            chapterSignals >= 8);
+        chapterSignals >= 8 ||
+        (text.length < 15000 &&
+            chapterSignals >= 3 &&
+            (lowerText.contains('目录') || lowerHeading.contains('目录')));
 
     final adSignals = RegExp(
       r'公众号|关注我们|扫码|电子书搜索下载|书单分享|资源分享|网站[:：]|微信|微博|优惠|购买|推荐关注|chenjin5\.com|welib\.org|https?://',
@@ -195,6 +199,27 @@ class BookParser {
 
   String _normaliseZipPath(String value) =>
       p.posix.normalize(value).replaceFirst('./', '');
+
+  static List<BookChapter> splitLongChapterText(String text) {
+    final matches = RegExp(
+      r'^\s*(第\s*(?:\d+|[一二三四五六七八九十百千万]+)\s*章(?=\s|[：:、.．-]|$).*)\s*$',
+      multiLine: true,
+    ).allMatches(text).toList();
+    if (matches.length < 2) return const [];
+    final chapters = <BookChapter>[];
+    for (var index = 0; index < matches.length; index++) {
+      final match = matches[index];
+      final end = index + 1 < matches.length
+          ? matches[index + 1].start
+          : text.length;
+      final chapterText = text.substring(match.start, end).trim();
+      if (chapterText.isEmpty) continue;
+      chapters.add(
+        BookChapter(title: match.group(1)!.trim(), text: chapterText),
+      );
+    }
+    return chapters;
+  }
 
   Iterable<XmlElement> _elementsByLocalName(
     XmlDocument document,
