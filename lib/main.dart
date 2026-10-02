@@ -682,7 +682,7 @@ class _WaveProgressIndicatorState extends State<WaveProgressIndicator>
             progress: widget.progress,
             phase: _controller.value,
             background: colors.surfaceContainerHighest,
-            foreground: colors.primary,
+            foreground: const Color(0xff2e7d32),
           ),
         ),
       ),
@@ -812,35 +812,36 @@ class JobCard extends StatelessWidget {
                       ),
                     ],
                   )
-                : job.audioFiles.isNotEmpty
-                ? Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: isCurrentPlayback && isPlaying
-                            ? '暂停'
-                            : '播放/继续',
-                        onPressed: () => onTogglePlayback(job),
-                        icon: Icon(
-                          isCurrentPlayback && isPlaying
-                              ? Icons.pause
-                              : Icons.play_arrow,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '删除任务记录',
-                        onPressed: () => onDelete(job),
-                        icon: const Icon(Icons.delete_outline),
-                      ),
-                      IconButton(
-                        tooltip: '打开音频文件夹',
-                        onPressed: () => onOpenFolder(job),
-                        icon: const Icon(Icons.folder_open_outlined),
-                      ),
-                    ],
-                  )
                 : const Icon(Icons.chevron_right),
           ),
+          if (job.status == JobStatus.completed && job.audioFiles.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 8, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  IconButton(
+                    tooltip: isCurrentPlayback && isPlaying ? '暂停' : '播放/继续',
+                    onPressed: () => onTogglePlayback(job),
+                    icon: Icon(
+                      isCurrentPlayback && isPlaying
+                          ? Icons.pause
+                          : Icons.play_arrow,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '删除任务记录',
+                    onPressed: () => onDelete(job),
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                  IconButton(
+                    tooltip: '打开音频文件夹',
+                    onPressed: () => onOpenFolder(job),
+                    icon: const Icon(Icons.folder_open_outlined),
+                  ),
+                ],
+              ),
+            ),
           if (job.status == JobStatus.running)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
