@@ -218,6 +218,29 @@ class BookParser {
         BookChapter(title: match.group(1)!.trim(), text: chapterText),
       );
     }
+    return removeDuplicatedContents(chapters);
+  }
+
+  static List<BookChapter> removeDuplicatedContents(
+    List<BookChapter> chapters,
+  ) {
+    if (chapters.length < 4 || chapters.length.isOdd) return chapters;
+    final half = chapters.length ~/ 2;
+    final first = chapters.sublist(0, half);
+    final second = chapters.sublist(half);
+    final sameTitles = List.generate(
+      half,
+      (index) => first[index].title == second[index].title,
+    ).every((same) => same);
+    final firstLength = first.fold<int>(
+      0,
+      (total, chapter) => total + chapter.text.length,
+    );
+    final secondLength = second.fold<int>(
+      0,
+      (total, chapter) => total + chapter.text.length,
+    );
+    if (sameTitles && firstLength * 3 < secondLength) return second;
     return chapters;
   }
 

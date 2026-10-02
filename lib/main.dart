@@ -336,7 +336,7 @@ class _HomePageState extends State<HomePage> {
             lastNotificationUpdate = now;
             unawaited(
               AndroidForegroundService.update(
-                completed: (progress.fraction * progress.totalChapters).round(),
+                completed: (progress.fraction * progress.totalChapters).floor(),
                 total: progress.totalChapters,
                 message: progress.message,
               ),
@@ -345,7 +345,7 @@ class _HomePageState extends State<HomePage> {
         },
         isCancelled: () => _cancelledJobIds.contains(job.id),
         isPaused: () => _pausedJobIds.contains(job.id),
-        resumeExisting: resume,
+        resumeExisting: resume && job.audioFiles.isNotEmpty,
       );
       if (!mounted || index >= _jobs.length) return;
       setState(
@@ -769,7 +769,9 @@ class JobCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final percentage = (job.progress.clamp(0.0, 1.0) * 100).round();
+    final percentage = job.status == JobStatus.completed
+        ? 100
+        : (job.progress.clamp(0.0, 0.99) * 100).floor();
     return Card(
       child: Column(
         children: [
@@ -1219,10 +1221,46 @@ class ConversionJob {
                 return !looksLikeContents;
               }).toList()
             : chapters;
+        final filteredChapters = cleanedChapters.isEmpty
+            ? sourceChapters
+            : cleanedChapters;
+        final normalizedChapters = BookParser.removeDuplicatedContents(
+          filteredChapters,
+        );
+        final needsFreshAudio = normalizedChapters.length != chapters.length;
         document = BookDocument(
           title: documentJson['title'] as String,
           format: BookFormat.values.byName(documentJson['format'] as String),
-          chapters: cleanedChapters.isEmpty ? sourceChapters : cleanedChapters,
+          chapters: normalizedChapters,
+        );
+        final savedAudioFiles =
+            (json['audioFiles'] as List?)?.whereType<String>().toList() ??
+            const <String>[];
+        final statusName = json['status'] as String? ?? JobStatus.ready.name;
+        final savedStatus = JobStatus.values.byName(statusName);
+        return ConversionJob(
+          id:
+              json['id'] as String? ??
+              DateTime.now().microsecondsSinceEpoch.toString(),
+          title: json['title'] as String,
+          format: json['format'] as String,
+          status:
+              needsFreshAudio &&
+                  (savedStatus == JobStatus.running ||
+                      savedStatus == JobStatus.paused)
+              ? JobStatus.running
+              : savedStatus,
+          detail: needsFreshAudio
+              ? '章节结构已更新，准备重新转换'
+              : json['detail'] as String? ?? '等待转换',
+          progress: needsFreshAudio
+              ? 0
+              : (json['progress'] as num?)?.toDouble() ?? 0,
+          audioFiles: needsFreshAudio ? const [] : savedAudioFiles,
+          mergedAudioFile: needsFreshAudio
+              ? null
+              : json['mergedAudioFile'] as String?,
+          document: document,
         );
       }
       final statusName = json['status'] as String? ?? JobStatus.ready.name;

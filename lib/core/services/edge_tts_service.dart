@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -215,11 +216,23 @@ class EdgeTtsService {
     final mergedFile = File(
       p.join(directory.path, '${_safeName(book.title)}.mp3'),
     );
-    final mergedBytes = BytesBuilder(copy: false);
-    for (final file in orderedFiles) {
-      mergedBytes.add(await file.readAsBytes());
+    onProgress?.call(
+      ConversionProgress(
+        chapter: book.chapters.length,
+        totalChapters: book.chapters.length,
+        overallFraction: 0.99,
+        message: '正在合并音频…',
+      ),
+    );
+    final sink = mergedFile.openWrite();
+    try {
+      for (final file in orderedFiles) {
+        await sink.addStream(file.openRead());
+      }
+      await sink.flush();
+    } finally {
+      await sink.close();
     }
-    await mergedFile.writeAsBytes(mergedBytes.takeBytes(), flush: true);
     return ConversionResult(chapters: orderedFiles, mergedFile: mergedFile);
   }
 
@@ -253,7 +266,9 @@ class EdgeTtsService {
     final audioBuilder = BytesBuilder(copy: false);
     var audioBytes = 0;
     var reportedTextCharacters = 0;
-    await for (final event in communicator.stream()) {
+    await for (final event in communicator.stream().timeout(
+      const Duration(minutes: 2),
+    )) {
       if (isCancelled?.call() == true) throw const ConversionCancelled();
       while (isPaused?.call() == true) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -281,7 +296,8 @@ class EdgeTtsService {
 
   bool _isRateLimited(Object error) {
     final message = error.toString().toLowerCase();
-    return message.contains('429') ||
+    return error is TimeoutException ||
+        message.contains('429') ||
         message.contains('too many requests') ||
         message.contains('rate limit') ||
         message.contains('throttl') ||
