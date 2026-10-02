@@ -152,9 +152,9 @@ class BookParser {
     ).allMatches(lowerText).length;
     final looksLikeAdvertisement =
         (lowerPath.contains('ad') || adSignals >= 2) && text.length < 3000;
-    final chapterSignals = RegExp(r'第\s*(?:\d+|[一二三四五六七八九十百千万]+)\s*章')
-        .allMatches(text)
-        .length;
+    final chapterSignals = RegExp(
+      r'第\s*(?:\d+|[一二三四五六七八九十百千万]+)\s*章',
+    ).allMatches(text).length;
     final looksLikeContents =
         text.length < 15000 &&
         chapterSignals >= 3 &&

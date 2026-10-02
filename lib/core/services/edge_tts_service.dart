@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:edge_tts/edge_tts.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -54,6 +55,7 @@ class ConversionProgress {
 
 class EdgeTtsService {
   static const maxConcurrentConversions = 2;
+  static const _storageChannel = MethodChannel('abooks_maker/storage');
 
   Future<File> preview({TtsSettings settings = const TtsSettings()}) async {
     final root = await getApplicationDocumentsDirectory();
@@ -78,9 +80,7 @@ class EdgeTtsService {
     void Function(ConversionProgress progress)? onProgress,
     bool Function()? isCancelled,
   }) async {
-    final root =
-        await getDownloadsDirectory() ??
-        await getApplicationDocumentsDirectory();
+    final root = await _downloadsDirectory();
     final directory = Directory(
       outputDirectory ?? p.join(root.path, 'abooks', _safeName(book.title)),
     );
@@ -173,6 +173,19 @@ class EdgeTtsService {
     }
     await mergedFile.writeAsBytes(mergedBytes.takeBytes(), flush: true);
     return ConversionResult(chapters: orderedFiles, mergedFile: mergedFile);
+  }
+
+  Future<Directory> _downloadsDirectory() async {
+    if (Platform.isAndroid) {
+      final publicPath = await _storageChannel.invokeMethod<String>(
+        'publicDownloadsDirectory',
+      );
+      if (publicPath != null && publicPath.isNotEmpty) {
+        return Directory(publicPath);
+      }
+    }
+    return await getDownloadsDirectory() ??
+        await getApplicationDocumentsDirectory();
   }
 
   Future<Uint8List> _synthesizeChapter(
