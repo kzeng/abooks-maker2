@@ -81,10 +81,18 @@ class EdgeTtsService {
     bool Function()? isCancelled,
   }) async {
     final root = await _downloadsDirectory();
-    final directory = Directory(
+    var directory = Directory(
       outputDirectory ?? p.join(root.path, 'abooks', _safeName(book.title)),
     );
-    await directory.create(recursive: true);
+    try {
+      await directory.create(recursive: true);
+    } on FileSystemException {
+      final fallback = await getApplicationDocumentsDirectory();
+      directory = Directory(
+        p.join(fallback.path, 'Abooks Maker', _safeName(book.title)),
+      );
+      await directory.create(recursive: true);
+    }
 
     final outputFiles = List<File?>.filled(book.chapters.length, null);
     final chapterFractions = List<double>.filled(book.chapters.length, 0);
