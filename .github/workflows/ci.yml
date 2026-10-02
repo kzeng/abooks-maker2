@@ -6,6 +6,7 @@ on:
   pull_request:
 
 jobs:
+  # Keep formatting, analysis, and tests required for every change.
   test:
     runs-on: ubuntu-24.04
     steps:
