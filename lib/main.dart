@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -50,6 +51,8 @@ class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   bool _importing = false;
   String? _playingJobTitle;
+  Process? _desktopAudioProcess;
+  bool _desktopAudioPaused = false;
   late final StreamSubscription<PlayerState> _playerStateSubscription;
 
   @override
@@ -63,6 +66,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _desktopAudioProcess?.kill();
     _player.dispose();
     _playerStateSubscription.cancel();
     super.dispose();
@@ -100,7 +104,9 @@ class _HomePageState extends State<HomePage> {
             onStopPlayback: _stopPlayback,
             onCancel: _cancelJob,
             currentPlaybackTitle: _playingJobTitle,
-            isPlaying: _player.playing,
+            isPlaying:
+                _player.playing ||
+                (_desktopAudioProcess != null && !_desktopAudioPaused),
           ),
           1 => SettingsView(
             settings: _settings,
@@ -274,6 +280,18 @@ class _HomePageState extends State<HomePage> {
   Future<void> _togglePlayback(ConversionJob job) async {
     if (job.audioFiles.isEmpty) return;
     try {
+      if (Platform.isLinux) {
+        final file = job.mergedAudioFile ?? job.audioFiles.first;
+        if (_playingJobTitle == job.title && _desktopAudioProcess != null) {
+          _desktopAudioProcess!.stdin.write('p');
+          await _desktopAudioProcess!.stdin.flush();
+          _desktopAudioPaused = !_desktopAudioPaused;
+          if (mounted) setState(() {});
+          return;
+        }
+        await _playDesktopAudio(file, job.title);
+        return;
+      }
       if (_playingJobTitle == job.title) {
         if (_player.playing) {
           await _player.pause();
@@ -294,6 +312,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _stopPlayback() async {
+    if (Platform.isLinux) {
+      _desktopAudioProcess?.kill();
+      _desktopAudioProcess = null;
+      if (mounted) setState(() => _playingJobTitle = null);
+      return;
+    }
     await _player.stop();
     if (mounted) setState(() => _playingJobTitle = null);
   }
@@ -302,6 +326,11 @@ class _HomePageState extends State<HomePage> {
     _showMessage('正在生成试听音频…');
     try {
       final file = await _tts.preview(settings: _settings.tts);
+      if (Platform.isLinux) {
+        await _playDesktopAudio(file.path, '试听');
+        _showMessage('正在播放当前设置的试听效果。');
+        return;
+      }
       await _player.setFilePath(file.path);
       _playingJobTitle = '试听';
       await _player.play();
@@ -309,6 +338,27 @@ class _HomePageState extends State<HomePage> {
     } on Object catch (error) {
       _showMessage('试听失败：${_friendlyError(error)}');
     }
+  }
+
+  Future<void> _playDesktopAudio(String path, String title) async {
+    _desktopAudioProcess?.kill();
+    final process = await Process.start('ffplay', [
+      '-nodisp',
+      '-autoexit',
+      '-loglevel',
+      'error',
+      path,
+    ], runInShell: false);
+    _desktopAudioProcess = process;
+    _desktopAudioPaused = false;
+    _playingJobTitle = title;
+    if (mounted) setState(() {});
+    process.exitCode.then((_) {
+      if (identical(_desktopAudioProcess, process)) {
+        _desktopAudioProcess = null;
+        if (mounted) setState(() => _playingJobTitle = null);
+      }
+    });
   }
 
   String _friendlyError(Object error) =>
