@@ -13,6 +13,7 @@ import 'core/parsers/book_parser.dart';
 import 'core/services/app_settings.dart';
 import 'core/services/android_foreground_service.dart';
 import 'core/services/edge_tts_service.dart';
+import 'core/services/file_location_service.dart';
 import 'core/services/task_store.dart';
 
 Future<void> main() async {
@@ -172,9 +173,10 @@ class _HomePageState extends State<HomePage> {
             onImport: _importBook,
             onConvert: _enqueueConversion,
             onTogglePlayback: _togglePlayback,
-            onStopPlayback: _stopPlayback,
             onCancel: _cancelJob,
             onTogglePause: _toggleConversionPause,
+            onDelete: _deleteJob,
+            onOpenFolder: _openJobFolder,
             currentPlaybackTitle: _playingJobTitle,
             isPlaying:
                 _player.playing ||
@@ -390,6 +392,42 @@ class _HomePageState extends State<HomePage> {
     _showMessage('将在当前章节完成后停止转换。');
   }
 
+  Future<void> _deleteJob(ConversionJob job) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除任务记录？'),
+        content: Text('将从任务列表中删除“${job.title}”。已生成的音频文件不会被删除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除记录'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (_playingJobTitle == job.title) await _stopPlayback();
+    setState(() => _jobs.removeWhere((item) => item.id == job.id));
+    await _persistJobs();
+  }
+
+  Future<void> _openJobFolder(ConversionJob job) async {
+    final audioPath =
+        job.mergedAudioFile ??
+        (job.audioFiles.isEmpty ? null : job.audioFiles.first);
+    if (audioPath == null) return;
+    try {
+      await FileLocationService.openDirectory(File(audioPath).parent.path);
+    } on Object catch (error) {
+      _showMessage('打开文件夹失败：${_friendlyError(error)}');
+    }
+  }
+
   void _toggleConversionPause(ConversionJob job) {
     final index = _jobs.indexOf(job);
     if (_pausedJobIds.contains(job.id)) {
@@ -522,9 +560,10 @@ class LibraryView extends StatelessWidget {
     required this.onImport,
     required this.onConvert,
     required this.onTogglePlayback,
-    required this.onStopPlayback,
     required this.onCancel,
     required this.onTogglePause,
+    required this.onDelete,
+    required this.onOpenFolder,
     required this.currentPlaybackTitle,
     required this.isPlaying,
   });
@@ -534,16 +573,17 @@ class LibraryView extends StatelessWidget {
   final VoidCallback onImport;
   final ValueChanged<ConversionJob> onConvert;
   final ValueChanged<ConversionJob> onTogglePlayback;
-  final VoidCallback onStopPlayback;
   final ValueChanged<ConversionJob> onCancel;
   final ValueChanged<ConversionJob> onTogglePause;
+  final ValueChanged<ConversionJob> onDelete;
+  final ValueChanged<ConversionJob> onOpenFolder;
   final String? currentPlaybackTitle;
   final bool isPlaying;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       children: [
         Text('有声书工具', style: Theme.of(context).textTheme.headlineMedium),
         const SizedBox(height: 24),
@@ -595,11 +635,12 @@ class LibraryView extends StatelessWidget {
               job: job,
               onConvert: onConvert,
               onTogglePlayback: onTogglePlayback,
-              onStopPlayback: onStopPlayback,
               isCurrentPlayback: currentPlaybackTitle == job.title,
               isPlaying: isPlaying,
               onCancel: onCancel,
               onTogglePause: onTogglePause,
+              onDelete: onDelete,
+              onOpenFolder: onOpenFolder,
             ),
           ),
       ],
@@ -708,21 +749,23 @@ class JobCard extends StatelessWidget {
     required this.job,
     required this.onConvert,
     required this.onTogglePlayback,
-    required this.onStopPlayback,
     required this.isCurrentPlayback,
     required this.isPlaying,
     required this.onCancel,
     required this.onTogglePause,
+    required this.onDelete,
+    required this.onOpenFolder,
   });
 
   final ConversionJob job;
   final ValueChanged<ConversionJob> onConvert;
   final ValueChanged<ConversionJob> onTogglePlayback;
-  final VoidCallback onStopPlayback;
   final bool isCurrentPlayback;
   final bool isPlaying;
   final ValueChanged<ConversionJob> onCancel;
   final ValueChanged<ConversionJob> onTogglePause;
+  final ValueChanged<ConversionJob> onDelete;
+  final ValueChanged<ConversionJob> onOpenFolder;
 
   @override
   Widget build(BuildContext context) {
@@ -785,9 +828,14 @@ class JobCard extends StatelessWidget {
                         ),
                       ),
                       IconButton(
-                        tooltip: '停止',
-                        onPressed: isCurrentPlayback ? onStopPlayback : null,
-                        icon: const Icon(Icons.stop),
+                        tooltip: '删除任务记录',
+                        onPressed: () => onDelete(job),
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                      IconButton(
+                        tooltip: '打开音频文件夹',
+                        onPressed: () => onOpenFolder(job),
+                        icon: const Icon(Icons.folder_open_outlined),
                       ),
                     ],
                   )
