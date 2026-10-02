@@ -11,7 +11,9 @@ import 'package:pdfrx/pdfrx.dart';
 import 'core/models/book_document.dart';
 import 'core/parsers/book_parser.dart';
 import 'core/services/app_settings.dart';
+import 'core/services/android_foreground_service.dart';
 import 'core/services/edge_tts_service.dart';
+import 'core/services/task_store.dart';
 
 Future<void> main() async {
   pdfrxFlutterInitialize();
@@ -45,9 +47,13 @@ class _HomePageState extends State<HomePage> {
   final _tts = EdgeTtsService();
   final _player = AudioPlayer();
   final _settingsRepository = SettingsRepository();
+  final _taskStore = TaskStore();
   AppSettings _settings = const AppSettings();
-  final Set<ConversionJob> _cancelledJobs = <ConversionJob>{};
   final List<ConversionJob> _jobs = [];
+  final Set<String> _cancelledJobIds = <String>{};
+  final Set<String> _pausedJobIds = <String>{};
+  Timer? _backgroundCommandTimer;
+  String? _activeJobId;
   int _selectedIndex = 0;
   bool _importing = false;
   String? _playingJobTitle;
@@ -58,7 +64,11 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _loadSettings();
+    unawaited(_initialize());
+    _backgroundCommandTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _pollBackgroundCommand(),
+    );
     _playerStateSubscription = _player.playerStateStream.listen((_) {
       if (mounted) setState(() {});
     });
@@ -66,10 +76,61 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _backgroundCommandTimer?.cancel();
     _desktopAudioProcess?.kill();
     _player.dispose();
     _playerStateSubscription.cancel();
     super.dispose();
+  }
+
+  Future<void> _initialize() async {
+    await AndroidForegroundService.requestNotificationPermission();
+    final settings = await _settingsRepository.load();
+    final storedJobs = await _taskStore.load();
+    if (!mounted) return;
+    setState(() {
+      _settings = settings;
+      _jobs.addAll(
+        storedJobs.map(ConversionJob.fromJson).whereType<ConversionJob>(),
+      );
+    });
+    for (final job in List<ConversionJob>.from(_jobs)) {
+      if (job.status == JobStatus.running || job.status == JobStatus.paused) {
+        unawaited(_convertJob(job, resume: true));
+      }
+    }
+  }
+
+  Future<void> _persistJobs() async {
+    await _taskStore.save(_jobs.map((job) => job.toJson()).toList());
+  }
+
+  Future<void> _pollBackgroundCommand() async {
+    final command = await AndroidForegroundService.command();
+    final activeId = _activeJobId;
+    if (activeId == null || command == null) return;
+    if (command == 'pause') {
+      _pausedJobIds.add(activeId);
+      await AndroidForegroundService.clearCommand();
+      final index = _jobs.indexWhere((job) => job.id == activeId);
+      if (index >= 0) {
+        _jobs[index] = _jobs[index].copyWith(status: JobStatus.paused);
+      }
+      await _persistJobs();
+      if (mounted) setState(() {});
+    } else if (command == 'resume') {
+      _pausedJobIds.remove(activeId);
+      await AndroidForegroundService.clearCommand();
+      final index = _jobs.indexWhere((job) => job.id == activeId);
+      if (index >= 0) {
+        _jobs[index] = _jobs[index].copyWith(status: JobStatus.running);
+      }
+      await _persistJobs();
+      if (mounted) setState(() {});
+    } else if (command == 'cancel') {
+      _cancelledJobIds.add(activeId);
+      await AndroidForegroundService.clearCommand();
+    }
   }
 
   @override
@@ -103,6 +164,7 @@ class _HomePageState extends State<HomePage> {
             onTogglePlayback: _togglePlayback,
             onStopPlayback: _stopPlayback,
             onCancel: _cancelJob,
+            onTogglePause: _toggleConversionPause,
             currentPlaybackTitle: _playingJobTitle,
             isPlaying:
                 _player.playing ||
@@ -172,6 +234,7 @@ class _HomePageState extends State<HomePage> {
           _jobs.insert(
             0,
             ConversionJob(
+              id: DateTime.now().microsecondsSinceEpoch.toString(),
               title: document.title,
               format: document.format.label,
               status: JobStatus.ready,
@@ -181,6 +244,7 @@ class _HomePageState extends State<HomePage> {
             ),
           );
         });
+        await _persistJobs();
         imported++;
       } on Object catch (error) {
         if (mounted) _showMessage('${file.name}：${_friendlyError(error)}');
@@ -196,9 +260,16 @@ class _HomePageState extends State<HomePage> {
     return file.readAsBytes();
   }
 
-  Future<void> _convertJob(ConversionJob job) async {
+  Future<void> _convertJob(ConversionJob job, {bool resume = false}) async {
     final index = _jobs.indexOf(job);
     if (index < 0 || job.document == null) return;
+    if (_activeJobId != null && _activeJobId != job.id) {
+      _showMessage('已有转换任务正在运行，请稍后再试。');
+      return;
+    }
+    _activeJobId = job.id;
+    _cancelledJobIds.remove(job.id);
+    if (!resume) _pausedJobIds.remove(job.id);
     setState(
       () => _jobs[index] = job.copyWith(
         status: JobStatus.running,
@@ -206,7 +277,11 @@ class _HomePageState extends State<HomePage> {
         progress: 0.01,
       ),
     );
-    _cancelledJobs.remove(job);
+    await _persistJobs();
+    await AndroidForegroundService.start(
+      title: job.title,
+      total: job.document!.chapters.length,
+    );
     try {
       final result = await _tts.convert(
         job.document!,
@@ -217,16 +292,32 @@ class _HomePageState extends State<HomePage> {
             : '${_settings.outputDirectory}/${_safeFileName(job.title)}',
         onProgress: (progress) {
           if (!mounted || index >= _jobs.length) return;
+          final files = [..._jobs[index].audioFiles];
+          if (progress.completedFile != null &&
+              !files.contains(progress.completedFile!.path)) {
+            files.add(progress.completedFile!.path);
+          }
           setState(
             () => _jobs[index] = _jobs[index].copyWith(
               status: JobStatus.running,
               progress: progress.fraction.clamp(0.01, 1.0),
+              audioFiles: files,
               detail:
                   '${progress.chapter}/${progress.totalChapters} · ${progress.message}',
             ),
           );
+          unawaited(_persistJobs());
+          unawaited(
+            AndroidForegroundService.update(
+              completed: (progress.fraction * progress.totalChapters).round(),
+              total: progress.totalChapters,
+              message: progress.message,
+            ),
+          );
         },
-        isCancelled: () => _cancelledJobs.contains(job),
+        isCancelled: () => _cancelledJobIds.contains(job.id),
+        isPaused: () => _pausedJobIds.contains(job.id),
+        resumeExisting: resume,
       );
       if (!mounted || index >= _jobs.length) return;
       setState(
@@ -238,6 +329,8 @@ class _HomePageState extends State<HomePage> {
           mergedAudioFile: result.mergedFile.path,
         ),
       );
+      await _persistJobs();
+      await AndroidForegroundService.stop();
       _showMessage('转换完成，章节 MP3 和合并 MP3 已保存。');
     } on ConversionCancelled {
       if (!mounted || index >= _jobs.length) return;
@@ -247,6 +340,8 @@ class _HomePageState extends State<HomePage> {
           detail: '已取消，可重新开始',
         ),
       );
+      await _persistJobs();
+      await AndroidForegroundService.stop();
     } on Object catch (error) {
       if (!mounted || index >= _jobs.length) return;
       setState(
@@ -255,18 +350,39 @@ class _HomePageState extends State<HomePage> {
           detail: _friendlyError(error),
         ),
       );
+      await _persistJobs();
+      await AndroidForegroundService.stop();
       _showMessage('转换失败：${_friendlyError(error)}');
+    } finally {
+      if (_activeJobId == job.id) _activeJobId = null;
     }
   }
 
   void _cancelJob(ConversionJob job) {
-    _cancelledJobs.add(job);
+    _cancelledJobIds.add(job.id);
+    unawaited(AndroidForegroundService.cancel());
     _showMessage('将在当前章节完成后停止转换。');
   }
 
-  Future<void> _loadSettings() async {
-    final settings = await _settingsRepository.load();
-    if (mounted) setState(() => _settings = settings);
+  void _toggleConversionPause(ConversionJob job) {
+    final index = _jobs.indexOf(job);
+    if (_pausedJobIds.contains(job.id)) {
+      _pausedJobIds.remove(job.id);
+      unawaited(AndroidForegroundService.resume());
+      _showMessage('已继续转换。');
+      if (index >= 0) {
+        _jobs[index] = _jobs[index].copyWith(status: JobStatus.running);
+      }
+    } else {
+      _pausedJobIds.add(job.id);
+      unawaited(AndroidForegroundService.pause());
+      _showMessage('已暂停转换，可在通知栏继续。');
+      if (index >= 0) {
+        _jobs[index] = _jobs[index].copyWith(status: JobStatus.paused);
+      }
+    }
+    unawaited(_persistJobs());
+    if (mounted) setState(() {});
   }
 
   Future<void> _saveSettings(AppSettings settings) async {
@@ -382,6 +498,7 @@ class LibraryView extends StatelessWidget {
     required this.onTogglePlayback,
     required this.onStopPlayback,
     required this.onCancel,
+    required this.onTogglePause,
     required this.currentPlaybackTitle,
     required this.isPlaying,
   });
@@ -393,6 +510,7 @@ class LibraryView extends StatelessWidget {
   final ValueChanged<ConversionJob> onTogglePlayback;
   final VoidCallback onStopPlayback;
   final ValueChanged<ConversionJob> onCancel;
+  final ValueChanged<ConversionJob> onTogglePause;
   final String? currentPlaybackTitle;
   final bool isPlaying;
 
@@ -455,6 +573,7 @@ class LibraryView extends StatelessWidget {
               isCurrentPlayback: currentPlaybackTitle == job.title,
               isPlaying: isPlaying,
               onCancel: onCancel,
+              onTogglePause: onTogglePause,
             ),
           ),
       ],
@@ -567,6 +686,7 @@ class JobCard extends StatelessWidget {
     required this.isCurrentPlayback,
     required this.isPlaying,
     required this.onCancel,
+    required this.onTogglePause,
   });
 
   final ConversionJob job;
@@ -576,6 +696,7 @@ class JobCard extends StatelessWidget {
   final bool isCurrentPlayback;
   final bool isPlaying;
   final ValueChanged<ConversionJob> onCancel;
+  final ValueChanged<ConversionJob> onTogglePause;
 
   @override
   Widget build(BuildContext context) {
@@ -591,16 +712,36 @@ class JobCard extends StatelessWidget {
             subtitle: job.status == JobStatus.running
                 ? null
                 : Text('${job.format} · ${job.detail}'),
-            trailing: job.document != null && job.status == JobStatus.ready
+            trailing:
+                job.document != null &&
+                    (job.status == JobStatus.ready ||
+                        job.status == JobStatus.cancelled)
                 ? OutlinedButton(
                     onPressed: () => onConvert(job),
                     child: const Text('转换'),
                   )
-                : job.status == JobStatus.running
-                ? IconButton(
-                    tooltip: '取消转换',
-                    onPressed: () => onCancel(job),
-                    icon: const Icon(Icons.stop_circle_outlined),
+                : job.status == JobStatus.running ||
+                      job.status == JobStatus.paused
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: job.status == JobStatus.paused
+                            ? '继续转换'
+                            : '暂停转换',
+                        onPressed: () => onTogglePause(job),
+                        icon: Icon(
+                          job.status == JobStatus.paused
+                              ? Icons.play_arrow
+                              : Icons.pause,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: '取消转换',
+                        onPressed: () => onCancel(job),
+                        icon: const Icon(Icons.stop_circle_outlined),
+                      ),
+                    ],
                   )
                 : job.audioFiles.isNotEmpty
                 ? Row(
@@ -844,12 +985,13 @@ class _SettingsViewState extends State<SettingsView> {
   };
 }
 
-enum JobStatus { ready, running, completed, failed, cancelled }
+enum JobStatus { ready, running, paused, completed, failed, cancelled }
 
 extension on JobStatus {
   IconData get icon => switch (this) {
     JobStatus.ready => Icons.pending_outlined,
     JobStatus.running => Icons.sync,
+    JobStatus.paused => Icons.pause_circle_outline,
     JobStatus.completed => Icons.check_circle_outline,
     JobStatus.failed => Icons.error_outline,
     JobStatus.cancelled => Icons.cancel_outlined,
@@ -908,7 +1050,7 @@ class AboutView extends StatelessWidget {
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(Icons.info_outline),
                     title: Text('Version'),
-                    subtitle: Text('0.0.1'),
+                    subtitle: Text('1.0.2'),
                   ),
                 ],
               ),
@@ -922,6 +1064,7 @@ class AboutView extends StatelessWidget {
 
 class ConversionJob {
   const ConversionJob({
+    required this.id,
     required this.title,
     required this.format,
     required this.status,
@@ -932,6 +1075,7 @@ class ConversionJob {
     this.progress = 0,
   });
 
+  final String id;
   final String title;
   final String format;
   final JobStatus status;
@@ -941,6 +1085,67 @@ class ConversionJob {
   final String? mergedAudioFile;
   final double progress;
 
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'format': format,
+    'status': status.name,
+    'detail': detail,
+    'progress': progress,
+    'audioFiles': audioFiles,
+    'mergedAudioFile': mergedAudioFile,
+    if (document != null)
+      'document': {
+        'title': document!.title,
+        'format': document!.format.name,
+        'chapters': document!.chapters
+            .map((chapter) => {'title': chapter.title, 'text': chapter.text})
+            .toList(),
+      },
+  };
+
+  static ConversionJob? fromJson(Map<String, dynamic> json) {
+    try {
+      final documentJson = json['document'] as Map?;
+      BookDocument? document;
+      if (documentJson != null) {
+        final chapters = (documentJson['chapters'] as List)
+            .whereType<Map>()
+            .map(
+              (chapter) => BookChapter(
+                title: chapter['title'] as String,
+                text: chapter['text'] as String,
+              ),
+            )
+            .toList();
+        document = BookDocument(
+          title: documentJson['title'] as String,
+          format: BookFormat.values.byName(documentJson['format'] as String),
+          chapters: chapters,
+        );
+      }
+      final statusName = json['status'] as String? ?? JobStatus.ready.name;
+      final status = JobStatus.values.byName(statusName);
+      return ConversionJob(
+        id:
+            json['id'] as String? ??
+            DateTime.now().microsecondsSinceEpoch.toString(),
+        title: json['title'] as String,
+        format: json['format'] as String,
+        status: status == JobStatus.running ? JobStatus.running : status,
+        detail: json['detail'] as String? ?? '等待转换',
+        progress: (json['progress'] as num?)?.toDouble() ?? 0,
+        audioFiles:
+            (json['audioFiles'] as List?)?.whereType<String>().toList() ??
+            const [],
+        mergedAudioFile: json['mergedAudioFile'] as String?,
+        document: document,
+      );
+    } on Object {
+      return null;
+    }
+  }
+
   ConversionJob copyWith({
     String? detail,
     JobStatus? status,
@@ -948,6 +1153,7 @@ class ConversionJob {
     String? mergedAudioFile,
     double? progress,
   }) => ConversionJob(
+    id: id,
     title: title,
     format: format,
     status: status ?? this.status,

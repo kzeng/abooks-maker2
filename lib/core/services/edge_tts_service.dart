@@ -38,6 +38,7 @@ class ConversionProgress {
     required this.message,
     this.chapterFraction = 0,
     this.overallFraction,
+    this.completedFile,
   });
 
   final int chapter;
@@ -45,6 +46,7 @@ class ConversionProgress {
   final String message;
   final double chapterFraction;
   final double? overallFraction;
+  final File? completedFile;
 
   double get fraction => totalChapters == 0
       ? 0
@@ -79,6 +81,8 @@ class EdgeTtsService {
     int maxConcurrent = EdgeTtsService.maxConcurrentConversions,
     void Function(ConversionProgress progress)? onProgress,
     bool Function()? isCancelled,
+    bool Function()? isPaused,
+    bool resumeExisting = true,
   }) async {
     final root = await _downloadsDirectory();
     var directory = Directory(
@@ -96,6 +100,20 @@ class EdgeTtsService {
 
     final outputFiles = List<File?>.filled(book.chapters.length, null);
     final chapterFractions = List<double>.filled(book.chapters.length, 0);
+    if (resumeExisting) {
+      for (var index = 0; index < book.chapters.length; index++) {
+        final file = File(
+          p.join(
+            directory.path,
+            '${(index + 1).toString().padLeft(3, '0')}-${_safeName(book.chapters[index].title)}.mp3',
+          ),
+        );
+        if (await file.exists() && await file.length() > 0) {
+          outputFiles[index] = file;
+          chapterFractions[index] = 1;
+        }
+      }
+    }
     var adaptiveConcurrency = maxConcurrent.clamp(1, 10).toInt();
     var activeConversions = 0;
     var nextIndex = 0;
@@ -118,7 +136,10 @@ class EdgeTtsService {
     Future<void> worker() async {
       while (true) {
         if (isCancelled?.call() == true) throw const ConversionCancelled();
-        final index = nextIndex++;
+        var index = nextIndex++;
+        while (index < book.chapters.length && outputFiles[index] != null) {
+          index = nextIndex++;
+        }
         if (index >= book.chapters.length) return;
         final chapter = book.chapters[index];
         reportProgress(index, 0, '正在生成：${chapter.title}');
@@ -129,7 +150,13 @@ class EdgeTtsService {
             if (isCancelled?.call() == true) {
               throw const ConversionCancelled();
             }
+            while (isPaused?.call() == true) {
+              await Future<void>.delayed(const Duration(milliseconds: 250));
+            }
             await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+          while (isPaused?.call() == true) {
+            await Future<void>.delayed(const Duration(milliseconds: 250));
           }
           activeConversions++;
           try {
@@ -137,6 +164,7 @@ class EdgeTtsService {
               chapter,
               settings: settings,
               isCancelled: isCancelled,
+              isPaused: isPaused,
               onFraction: (fraction) =>
                   reportProgress(index, fraction, '正在生成：${chapter.title}'),
             );
@@ -161,7 +189,19 @@ class EdgeTtsService {
         );
         await file.writeAsBytes(audio, flush: true);
         outputFiles[index] = file;
-        reportProgress(index, 1, '已完成：${chapter.title}');
+        chapterFractions[index] = 1;
+        onProgress?.call(
+          ConversionProgress(
+            chapter: index,
+            totalChapters: book.chapters.length,
+            chapterFraction: 1,
+            overallFraction:
+                chapterFractions.fold<double>(0, (sum, value) => sum + value) /
+                book.chapters.length,
+            message: '已完成：${chapter.title}',
+            completedFile: file,
+          ),
+        );
       }
     }
 
@@ -200,6 +240,7 @@ class EdgeTtsService {
     BookChapter chapter, {
     required TtsSettings settings,
     required bool Function()? isCancelled,
+    required bool Function()? isPaused,
     required void Function(double fraction) onFraction,
   }) async {
     final communicator = Communicate(
@@ -214,6 +255,9 @@ class EdgeTtsService {
     var reportedTextCharacters = 0;
     await for (final event in communicator.stream()) {
       if (isCancelled?.call() == true) throw const ConversionCancelled();
+      while (isPaused?.call() == true) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
       if (event is AudioDataEvent) {
         audioBuilder.add(event.data);
         audioBytes += event.data.length;
