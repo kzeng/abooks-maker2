@@ -440,7 +440,7 @@ class _WaveProgressIndicatorState extends State<WaveProgressIndicator>
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) => SizedBox(
-        height: 18,
+        height: 22,
         child: CustomPaint(
           painter: _WaveProgressPainter(
             progress: widget.progress,
@@ -477,22 +477,28 @@ class _WaveProgressPainter extends CustomPainter {
     canvas.save();
     canvas.clipRRect(bounds);
     final indeterminate = progress < 0.02;
-    final start = indeterminate ? (phase * 1.4 - 0.4) * size.width : 0.0;
+    final rawStart = indeterminate ? (phase * 1.4 - 0.4) * size.width : 0.0;
     final width = indeterminate ? size.width * 0.45 : size.width * progress;
-    final end = (start + width).clamp(0.0, size.width);
+    final start = rawStart.clamp(0.0, size.width);
+    final end = (rawStart + width).clamp(0.0, size.width);
     if (end > 0 && (indeterminate || progress > 0)) {
       final path = Path()..moveTo(start, size.height);
       for (var x = start; x <= end; x += 2) {
         final wave =
             size.height *
-            0.30 *
+            0.22 *
             math.sin((x / size.width * 2 * math.pi * 2) + phase * 2 * math.pi);
         path.lineTo(x, size.height / 2 + wave);
       }
       path
         ..lineTo(end, size.height)
         ..close();
-      canvas.drawPath(path, Paint()..color = foreground);
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = foreground
+          ..isAntiAlias = true,
+      );
     }
     canvas.restore();
   }
@@ -684,7 +690,9 @@ class _SettingsViewState extends State<SettingsView> {
         ListTile(
           leading: Icon(Icons.folder_outlined),
           title: Text('输出格式'),
-          subtitle: Text(widget.settings.outputDirectory ?? '应用文档目录 · 章节 MP3'),
+          subtitle: Text(
+            widget.settings.outputDirectory ?? '系统下载目录 · abooks · 章节 MP3',
+          ),
           trailing: Icon(Icons.chevron_right),
           onTap: _chooseOutputDirectory,
         ),

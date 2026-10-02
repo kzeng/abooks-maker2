@@ -78,10 +78,11 @@ class EdgeTtsService {
     void Function(ConversionProgress progress)? onProgress,
     bool Function()? isCancelled,
   }) async {
-    final root = await getApplicationDocumentsDirectory();
+    final root =
+        await getDownloadsDirectory() ??
+        await getApplicationDocumentsDirectory();
     final directory = Directory(
-      outputDirectory ??
-          p.join(root.path, 'Abooks Maker', _safeName(book.title)),
+      outputDirectory ?? p.join(root.path, 'abooks', _safeName(book.title)),
     );
     await directory.create(recursive: true);
 
