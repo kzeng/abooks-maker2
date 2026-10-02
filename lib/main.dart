@@ -52,6 +52,7 @@ class _HomePageState extends State<HomePage> {
   final List<ConversionJob> _jobs = [];
   final Set<String> _cancelledJobIds = <String>{};
   final Set<String> _pausedJobIds = <String>{};
+  Future<void> _conversionQueue = Future<void>.value();
   Timer? _backgroundCommandTimer;
   String? _activeJobId;
   int _selectedIndex = 0;
@@ -96,7 +97,7 @@ class _HomePageState extends State<HomePage> {
     });
     for (final job in List<ConversionJob>.from(_jobs)) {
       if (job.status == JobStatus.running || job.status == JobStatus.paused) {
-        unawaited(_convertJob(job, resume: true));
+        _enqueueConversion(job, resume: true);
       }
     }
   }
@@ -133,6 +134,12 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _enqueueConversion(ConversionJob job, {bool resume = false}) {
+    _conversionQueue = _conversionQueue.then((_) async {
+      await _convertJob(job, resume: resume);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final destinations = <NavigationDestination>[
@@ -160,7 +167,7 @@ class _HomePageState extends State<HomePage> {
             jobs: _jobs,
             importing: _importing,
             onImport: _importBook,
-            onConvert: _convertJob,
+            onConvert: _enqueueConversion,
             onTogglePlayback: _togglePlayback,
             onStopPlayback: _stopPlayback,
             onCancel: _cancelJob,
@@ -263,10 +270,6 @@ class _HomePageState extends State<HomePage> {
   Future<void> _convertJob(ConversionJob job, {bool resume = false}) async {
     final index = _jobs.indexOf(job);
     if (index < 0 || job.document == null) return;
-    if (_activeJobId != null && _activeJobId != job.id) {
-      _showMessage('已有转换任务正在运行，请稍后再试。');
-      return;
-    }
     _activeJobId = job.id;
     _cancelledJobIds.remove(job.id);
     if (!resume) _pausedJobIds.remove(job.id);
