@@ -490,7 +490,7 @@ class _WaveProgressIndicatorState extends State<WaveProgressIndicator>
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) => SizedBox(
-        height: 22,
+        height: 12,
         child: CustomPaint(
           painter: _WaveProgressPainter(
             progress: widget.progress,
@@ -521,7 +521,7 @@ class _WaveProgressPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final bounds = RRect.fromRectAndRadius(
       Offset.zero & size,
-      const Radius.circular(8),
+      const Radius.circular(6),
     );
     canvas.drawRRect(bounds, Paint()..color = background);
     canvas.save();
@@ -536,7 +536,7 @@ class _WaveProgressPainter extends CustomPainter {
       for (var x = start; x <= end; x += 2) {
         final wave =
             size.height *
-            0.22 *
+            0.18 *
             math.sin((x / size.width * 2 * math.pi * 2) + phase * 2 * math.pi);
         path.lineTo(x, size.height / 2 + wave);
       }
