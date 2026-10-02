@@ -85,7 +85,10 @@ class ConversionForegroundService : Service() {
 
     private fun buildNotification(): Notification {
         val percent = if (total > 0) (progress * 100 / total).coerceIn(0, 100) else 0
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val launchIntent = (packageManager.getLaunchIntentForPackage(packageName)
+            ?: Intent(this, MainActivity::class.java)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
         val contentIntent = PendingIntent.getActivity(
             this,
             1,

@@ -53,6 +53,7 @@ class _HomePageState extends State<HomePage> {
   final Set<String> _cancelledJobIds = <String>{};
   final Set<String> _pausedJobIds = <String>{};
   Future<void> _conversionQueue = Future<void>.value();
+  Future<void> _persistQueue = Future<void>.value();
   Timer? _backgroundCommandTimer;
   String? _activeJobId;
   int _selectedIndex = 0;
@@ -103,7 +104,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _persistJobs() async {
-    await _taskStore.save(_jobs.map((job) => job.toJson()).toList());
+    final snapshot = _jobs.map((job) => job.toJson()).toList();
+    _persistQueue = _persistQueue.then((_) => _taskStore.save(snapshot));
+    await _persistQueue;
   }
 
   Future<void> _pollBackgroundCommand() async {
@@ -285,6 +288,8 @@ class _HomePageState extends State<HomePage> {
       title: job.title,
       total: job.document!.chapters.length,
     );
+    var lastUiUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+    var lastNotificationUpdate = DateTime.fromMillisecondsSinceEpoch(0);
     try {
       final result = await _tts.convert(
         job.document!,
@@ -295,28 +300,46 @@ class _HomePageState extends State<HomePage> {
             : '${_settings.outputDirectory}/${_safeFileName(job.title)}',
         onProgress: (progress) {
           if (!mounted || index >= _jobs.length) return;
+          final now = DateTime.now();
+          final chapterCompleted = progress.completedFile != null;
+          final updateUi =
+              chapterCompleted ||
+              now.difference(lastUiUpdate) >= const Duration(milliseconds: 250);
+          final updateNotification =
+              chapterCompleted ||
+              now.difference(lastNotificationUpdate) >=
+                  const Duration(milliseconds: 500);
+          if (!updateUi && !updateNotification) return;
           final files = [..._jobs[index].audioFiles];
-          if (progress.completedFile != null &&
+          if (chapterCompleted &&
               !files.contains(progress.completedFile!.path)) {
             files.add(progress.completedFile!.path);
           }
-          setState(
-            () => _jobs[index] = _jobs[index].copyWith(
-              status: JobStatus.running,
-              progress: progress.fraction.clamp(0.01, 1.0),
-              audioFiles: files,
-              detail:
-                  '${progress.chapter}/${progress.totalChapters} · ${progress.message}',
-            ),
-          );
-          unawaited(_persistJobs());
-          unawaited(
-            AndroidForegroundService.update(
-              completed: (progress.fraction * progress.totalChapters).round(),
-              total: progress.totalChapters,
-              message: progress.message,
-            ),
-          );
+          if (updateUi) {
+            lastUiUpdate = now;
+            setState(
+              () => _jobs[index] = _jobs[index].copyWith(
+                status: _pausedJobIds.contains(job.id)
+                    ? JobStatus.paused
+                    : JobStatus.running,
+                progress: progress.fraction.clamp(0.01, 1.0),
+                audioFiles: files,
+                detail:
+                    '${progress.chapter}/${progress.totalChapters} · ${progress.message}',
+              ),
+            );
+          }
+          if (chapterCompleted) unawaited(_persistJobs());
+          if (updateNotification) {
+            lastNotificationUpdate = now;
+            unawaited(
+              AndroidForegroundService.update(
+                completed: (progress.fraction * progress.totalChapters).round(),
+                total: progress.totalChapters,
+                message: progress.message,
+              ),
+            );
+          }
         },
         isCancelled: () => _cancelledJobIds.contains(job.id),
         isPaused: () => _pausedJobIds.contains(job.id),
