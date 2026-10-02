@@ -777,7 +777,7 @@ class JobCard extends StatelessWidget {
             leading: job.status == JobStatus.running
                 ? null
                 : CircleAvatar(child: Icon(job.status.icon)),
-            title: Text(job.title),
+            title: Text(_taskTitle(job.title)),
             subtitle: job.status == JobStatus.running
                 ? null
                 : Text('${job.format} · ${job.detail}'),
@@ -812,7 +812,7 @@ class JobCard extends StatelessWidget {
                       ),
                     ],
                   )
-                : const Icon(Icons.chevron_right),
+                : const SizedBox.shrink(),
           ),
           if (job.status == JobStatus.completed && job.audioFiles.isNotEmpty)
             Padding(
@@ -859,6 +859,12 @@ class JobCard extends StatelessWidget {
       ),
     );
   }
+}
+
+String _taskTitle(String title) {
+  final characters = title.runes.toList();
+  if (characters.length <= 25) return title;
+  return '${String.fromCharCodes(characters.take(25))}...';
 }
 
 class SettingsView extends StatefulWidget {
