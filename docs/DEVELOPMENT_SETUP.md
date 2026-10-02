@@ -28,6 +28,14 @@ The current agent environment cannot enter the sudo password. Run the command ma
 
 ## Validation commands
 
+Use this validation order to keep the feedback cycle short:
+
+1. Build the Android app locally, install it with `adb install -r`, and test on the connected phone.
+2. After Android is stable, build and test the Ubuntu desktop app locally.
+3. Only after both local targets pass, push changes and wait for GitHub Actions.
+
+Every successful local Android APK build should be followed by installation and launch on the connected device.
+
 ```bash
 source scripts/dev-env.sh
 flutter pub get
