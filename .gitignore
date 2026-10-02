@@ -44,5 +44,8 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Kotlin compiler cache
+/android/.kotlin/
+
 # Widget Preview related
 .widget_preview/
