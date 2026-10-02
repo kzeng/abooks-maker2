@@ -18,7 +18,13 @@ void main() {
       ..addFile(
         ArchiveFile.string(
           'OEBPS/content.opf',
-          '''<?xml version="1.0"?><package><metadata><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">罗马人的故事</dc:title></metadata><manifest><item id="two" href="text/two.xhtml" media-type="application/xhtml+xml"/><item id="one" href="text/one.xhtml" media-type="application/xhtml+xml"/><item id="ad" href="ad.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/><itemref idref="ad"/><itemref idref="two"/></spine></package>''',
+          '''<?xml version="1.0"?><package><metadata><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">罗马人的故事</dc:title></metadata><manifest><item id="copyright" href="copyright.xhtml" media-type="application/xhtml+xml"/><item id="two" href="text/two.xhtml" media-type="application/xhtml+xml"/><item id="one" href="text/one.xhtml" media-type="application/xhtml+xml"/><item id="ad" href="ad.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="copyright"/><itemref idref="one"/><itemref idref="ad"/><itemref idref="two"/></spine></package>''',
+        ),
+      )
+      ..addFile(
+        ArchiveFile.string(
+          'OEBPS/copyright.xhtml',
+          '<html><body>版权页 版权所有 出版社 ISBN 978-7-0000-0000-0</body></html>',
         ),
       )
       ..addFile(

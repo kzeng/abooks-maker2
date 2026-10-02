@@ -74,10 +74,10 @@ class BookParser {
       final document = html_parser.parse(utf8.decode(chapterBytes));
       final text = _cleanText(document.body?.text ?? document.text ?? '');
       if (text.isEmpty) continue;
-      if (_shouldSkipChapter(path, text)) continue;
+      final heading = document.querySelector('h1, h2, h3')?.text.trim();
+      if (_shouldSkipChapter(path, text, heading: heading)) continue;
       final chapterText = chapters.isEmpty ? _removeFrontMatter(text) : text;
       if (chapterText.isEmpty) continue;
-      final heading = document.querySelector('h1, h2, h3')?.text.trim();
       chapters.add(
         BookChapter(
           title: heading?.isNotEmpty == true
@@ -144,22 +144,47 @@ class BookParser {
       .replaceAll(RegExp(r'\n{3,}'), '\n\n')
       .trim();
 
-  bool _shouldSkipChapter(String path, String text) {
+  bool _shouldSkipChapter(String path, String text, {String? heading}) {
     final lowerPath = path.toLowerCase();
     final lowerText = text.toLowerCase();
-    final adSignals = RegExp(
-      r'公众号|电子书搜索下载|书单分享|网站[:：]|资源分享|chenjin5\.com|welib\.org',
-    ).allMatches(lowerText).length;
-    final looksLikeAdvertisement =
-        (lowerPath.contains('ad') || adSignals >= 2) && text.length < 3000;
+    final lowerHeading = heading?.toLowerCase() ?? '';
     final chapterSignals = RegExp(
       r'第\s*(?:\d+|[一二三四五六七八九十百千万]+)\s*章',
     ).allMatches(text).length;
     final looksLikeContents =
         text.length < 15000 &&
         chapterSignals >= 3 &&
-        (lowerText.contains('目录') || chapterSignals >= 8);
-    return looksLikeAdvertisement || looksLikeContents;
+        (lowerText.contains('目录') ||
+            lowerHeading.contains('目录') ||
+            chapterSignals >= 8);
+
+    final adSignals = RegExp(
+      r'公众号|关注我们|扫码|电子书搜索下载|书单分享|资源分享|网站[:：]|微信|微博|优惠|购买|推荐关注|chenjin5\.com|welib\.org|https?://',
+    ).allMatches(lowerText).length;
+    final adPath = RegExp(
+      r'(^|[/_-])(ad|ads|advert|advertisement|promo|promotion)([/_.-]|$)',
+    ).hasMatch(lowerPath);
+    final looksLikeAdvertisement =
+        text.length < 5000 && (adPath || adSignals >= 2);
+
+    final copyrightSignals = RegExp(
+      r'版权|著作权|版权所有|出版发行|出版社|isbn|cip数据|定价|印刷|责任编辑|法律声明',
+    ).allMatches(lowerText).length;
+    final metadataPath = RegExp(
+      r'(^|[/_-])(cover|titlepage|copyright|colophon|metadata|imprint)([/_.-]|$)',
+    ).hasMatch(lowerPath);
+    final looksLikeCopyrightPage =
+        text.length < 3500 &&
+        chapterSignals == 0 &&
+        (metadataPath || copyrightSignals >= 2);
+
+    final looksLikeCover =
+        text.length < 250 &&
+        RegExp(r'封面|书名|作者|cover|titlepage').hasMatch('$lowerPath $lowerText');
+    return looksLikeContents ||
+        looksLikeAdvertisement ||
+        looksLikeCopyrightPage ||
+        looksLikeCover;
   }
 
   String _removeFrontMatter(String text) {
