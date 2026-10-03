@@ -292,6 +292,7 @@ class _HomePageState extends State<HomePage> {
     );
     var lastUiUpdate = DateTime.fromMillisecondsSinceEpoch(0);
     var lastNotificationUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+    var lastTaskPersistence = DateTime.fromMillisecondsSinceEpoch(0);
     try {
       final result = await _tts.convert(
         job.document!,
@@ -312,7 +313,9 @@ class _HomePageState extends State<HomePage> {
               now.difference(lastNotificationUpdate) >=
                   const Duration(milliseconds: 500);
           if (!updateUi && !updateNotification) return;
-          final files = [..._jobs[index].audioFiles];
+          final files = chapterCompleted
+              ? [..._jobs[index].audioFiles]
+              : _jobs[index].audioFiles;
           if (chapterCompleted &&
               !files.contains(progress.completedFile!.path)) {
             files.add(progress.completedFile!.path);
@@ -331,7 +334,13 @@ class _HomePageState extends State<HomePage> {
               ),
             );
           }
-          if (chapterCompleted) unawaited(_persistJobs());
+          final persistTask =
+              chapterCompleted ||
+              now.difference(lastTaskPersistence) >= const Duration(seconds: 2);
+          if (persistTask) {
+            lastTaskPersistence = now;
+            unawaited(_persistJobs());
+          }
           if (updateNotification) {
             lastNotificationUpdate = now;
             unawaited(

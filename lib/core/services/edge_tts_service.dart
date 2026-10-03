@@ -146,6 +146,18 @@ class EdgeTtsService {
         reportProgress(index, 0, '正在生成：${chapter.title}');
         Uint8List audio;
         var attempt = 0;
+        var lastProgressReport = DateTime.fromMillisecondsSinceEpoch(0);
+        void reportChapterProgress(double fraction) {
+          final now = DateTime.now();
+          if (fraction < 0.98 &&
+              now.difference(lastProgressReport) <
+                  const Duration(milliseconds: 250)) {
+            return;
+          }
+          lastProgressReport = now;
+          reportProgress(index, fraction, '正在生成：${chapter.title}');
+        }
+
         while (true) {
           while (activeConversions >= adaptiveConcurrency) {
             if (isCancelled?.call() == true) {
@@ -166,8 +178,7 @@ class EdgeTtsService {
               settings: settings,
               isCancelled: isCancelled,
               isPaused: isPaused,
-              onFraction: (fraction) =>
-                  reportProgress(index, fraction, '正在生成：${chapter.title}'),
+              onFraction: reportChapterProgress,
             );
             break;
           } catch (error) {
@@ -216,18 +227,43 @@ class EdgeTtsService {
     final mergedFile = File(
       p.join(directory.path, '${_safeName(book.title)}.mp3'),
     );
+    var totalBytes = 0;
+    for (final file in orderedFiles) {
+      totalBytes += await file.length();
+    }
+    var copiedBytes = 0;
+    var lastMergeReport = DateTime.fromMillisecondsSinceEpoch(0);
     onProgress?.call(
       ConversionProgress(
         chapter: book.chapters.length,
         totalChapters: book.chapters.length,
         overallFraction: 0.99,
-        message: '正在合并音频…',
+        message: '正在合并音频… 0%',
       ),
     );
     final sink = mergedFile.openWrite();
     try {
       for (final file in orderedFiles) {
-        await sink.addStream(file.openRead());
+        await for (final chunk in file.openRead()) {
+          sink.add(chunk);
+          copiedBytes += chunk.length;
+          final now = DateTime.now();
+          if (now.difference(lastMergeReport) >=
+              const Duration(milliseconds: 250)) {
+            lastMergeReport = now;
+            final mergeFraction = totalBytes == 0
+                ? 1.0
+                : (copiedBytes / totalBytes).clamp(0.0, 1.0);
+            onProgress?.call(
+              ConversionProgress(
+                chapter: book.chapters.length,
+                totalChapters: book.chapters.length,
+                overallFraction: 0.99 + mergeFraction * 0.01,
+                message: '正在合并音频… ${(mergeFraction * 100).floor()}%',
+              ),
+            );
+          }
+        }
       }
       await sink.flush();
     } finally {
@@ -261,35 +297,71 @@ class EdgeTtsService {
       voice: settings.voice,
       rate: settings.rate,
       pitch: settings.pitch,
-      sentenceBoundary: true,
+      // Sentence-boundary metadata is not needed for audio output. Disabling
+      // it reduces websocket payloads and parsing work on mobile devices.
+      sentenceBoundary: false,
     );
     final audioBuilder = BytesBuilder(copy: false);
     var audioBytes = 0;
     var reportedTextCharacters = 0;
-    await for (final event in communicator.stream().timeout(
-      const Duration(minutes: 2),
-    )) {
-      if (isCancelled?.call() == true) throw const ConversionCancelled();
-      while (isPaused?.call() == true) {
-        await Future<void>.delayed(const Duration(milliseconds: 250));
+    var lastAudioBytes = 0;
+    var lastAudioAt = DateTime.now();
+    DateTime? nearCompleteAt;
+    try {
+      await for (final event in communicator.stream().timeout(
+        const Duration(seconds: 45),
+      )) {
+        if (isCancelled?.call() == true) throw const ConversionCancelled();
+        while (isPaused?.call() == true) {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+        }
+        if (event is AudioDataEvent) {
+          audioBuilder.add(event.data);
+          audioBytes += event.data.length;
+          lastAudioBytes = audioBytes;
+          lastAudioAt = DateTime.now();
+        } else if (event is SentenceBoundaryEvent) {
+          // Kept for compatibility if the TTS client emits metadata despite
+          // the setting; normal mobile conversions use byte-based progress.
+          reportedTextCharacters += event.text.length;
+        }
+        final textFraction = chapter.text.isEmpty
+            ? 0.0
+            : reportedTextCharacters / chapter.text.length;
+        final byteFraction =
+            audioBytes / (chapter.text.length * 30).clamp(1, double.infinity);
+        if (byteFraction >= 0.98) {
+          nearCompleteAt ??= DateTime.now();
+        }
+        if (audioBytes > 0 &&
+            audioBytes == lastAudioBytes &&
+            byteFraction >= 0.95 &&
+            DateTime.now().difference(lastAudioAt) >=
+                const Duration(seconds: 10)) {
+          // Some Edge TTS responses keep sending empty metadata frames after
+          // the final audio packet and never deliver turn.end.
+          break;
+        }
+        if (nearCompleteAt != null &&
+            DateTime.now().difference(nearCompleteAt) >=
+                const Duration(seconds: 10)) {
+          // The service can continue sending trailing packets without a
+          // turn.end event after the expected audio volume is complete.
+          break;
+        }
+        onFraction(
+          (reportedTextCharacters > 0 ? textFraction : byteFraction).clamp(
+            0.0,
+            0.98,
+          ),
+        );
       }
-      if (event is AudioDataEvent) {
-        audioBuilder.add(event.data);
-        audioBytes += event.data.length;
-      } else if (event is SentenceBoundaryEvent) {
-        reportedTextCharacters += event.text.length;
-      }
-      final textFraction = chapter.text.isEmpty
-          ? 0.0
-          : reportedTextCharacters / chapter.text.length;
-      final byteFraction =
+    } on TimeoutException {
+      // Edge TTS occasionally omits turn.end after delivering the final audio
+      // packets. Do not retry a nearly complete chapter forever in that case.
+      final estimatedFraction =
           audioBytes / (chapter.text.length * 30).clamp(1, double.infinity);
-      onFraction(
-        (reportedTextCharacters > 0 ? textFraction : byteFraction).clamp(
-          0.0,
-          0.98,
-        ),
-      );
+      if (audioBytes == 0 || estimatedFraction < 0.95) rethrow;
     }
     return audioBuilder.takeBytes();
   }
