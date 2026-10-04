@@ -26,7 +26,7 @@ class ABooksMakerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = ColorScheme.fromSeed(seedColor: const Color(0xff6750a4));
+    final scheme = ColorScheme.fromSeed(seedColor: const Color(0xff1565c0));
     return MaterialApp(
       title: 'Abooks Maker',
       debugShowCheckedModeBanner: false,
@@ -561,6 +561,92 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+class AbooksLogo extends StatelessWidget {
+  const AbooksLogo({super.key, this.size = 56});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = size * 0.24;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        color: const Color(0xffe3f2fd),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x331565c0),
+            blurRadius: 8,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            left: size * 0.08,
+            right: size * 0.08,
+            top: size * 0.08,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _LogoWaveBar(height: size * 0.32),
+                _LogoWaveBar(height: size * 0.58),
+                _LogoWaveBar(height: size * 0.82),
+                _LogoWaveBar(height: size * 0.64),
+                _LogoWaveBar(height: size * 0.38),
+              ],
+            ),
+          ),
+          Positioned(
+            left: size * 0.06,
+            bottom: size * 0.04,
+            child: Text(
+              'ABM',
+              style: TextStyle(
+                color: const Color(0xff0d47a1),
+                fontSize: size * 0.38,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -size * 0.015,
+              ),
+            ),
+          ),
+          Positioned(
+            right: size * 0.06,
+            top: size * 0.04,
+            child: Icon(
+              Icons.auto_awesome,
+              color: const Color(0xff64b5f6),
+              size: size * 0.18,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LogoWaveBar extends StatelessWidget {
+  const _LogoWaveBar({required this.height});
+
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: height * 0.28,
+      height: height,
+      decoration: BoxDecoration(
+        color: const Color(0xff90caf9),
+        borderRadius: BorderRadius.circular(20),
+      ),
+    );
+  }
+}
+
 class LibraryView extends StatelessWidget {
   const LibraryView({
     super.key,
@@ -594,8 +680,6 @@ class LibraryView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       children: [
-        Text('有声书工具', style: Theme.of(context).textTheme.headlineMedium),
-        const SizedBox(height: 24),
         Card(
           child: InkWell(
             onTap: importing ? null : onImport,
@@ -612,7 +696,10 @@ class LibraryView extends StatelessWidget {
                   const SizedBox(height: 12),
                   Text('导入电子书', style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 6),
-                  const Text('支持 EPUB、TXT、可复制文本 PDF，可一次选择多个文件'),
+                  const Text(
+                    '支持 EPUB、TXT、可复制文本 PDF，可一次选择多个文件\n生成音频文件',
+                    textAlign: TextAlign.center,
+                  ),
                   const SizedBox(height: 18),
                   FilledButton.icon(
                     onPressed: importing ? null : onImport,
@@ -785,7 +872,9 @@ class JobCard extends StatelessWidget {
       child: Column(
         children: [
           ListTile(
-            leading: job.status == JobStatus.running
+            leading:
+                job.status == JobStatus.running ||
+                    job.status == JobStatus.completed
                 ? null
                 : CircleAvatar(child: Icon(job.status.icon)),
             title: Text(_taskTitle(job.title)),
@@ -829,27 +918,30 @@ class JobCard extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 8, 8),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  IconButton(
-                    tooltip: isCurrentPlayback && isPlaying ? '暂停' : '播放/继续',
-                    onPressed: () => onTogglePlayback(job),
-                    icon: Icon(
-                      isCurrentPlayback && isPlaying
-                          ? Icons.pause
-                          : Icons.play_arrow,
+                  Icon(Icons.check_circle, color: Colors.green),
+                  const Spacer(),
+                  ...[
+                    IconButton(
+                      tooltip: isCurrentPlayback && isPlaying ? '暂停' : '播放/继续',
+                      onPressed: () => onTogglePlayback(job),
+                      icon: Icon(
+                        isCurrentPlayback && isPlaying
+                            ? Icons.pause
+                            : Icons.play_arrow,
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    tooltip: '删除任务记录',
-                    onPressed: () => onDelete(job),
-                    icon: const Icon(Icons.delete_outline),
-                  ),
-                  IconButton(
-                    tooltip: '打开音频文件夹',
-                    onPressed: () => onOpenFolder(job),
-                    icon: const Icon(Icons.folder_open_outlined),
-                  ),
+                    IconButton(
+                      tooltip: '删除任务记录',
+                      onPressed: () => onDelete(job),
+                      icon: const Icon(Icons.delete_outline),
+                    ),
+                    IconButton(
+                      tooltip: '打开音频文件夹',
+                      onPressed: () => onOpenFolder(job),
+                      icon: const Icon(Icons.folder_open_outlined),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -913,7 +1005,7 @@ class _SettingsViewState extends State<SettingsView> {
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        Text('转换设置', style: Theme.of(context).textTheme.headlineMedium),
+        Text('设置', style: Theme.of(context).textTheme.headlineMedium),
         const SizedBox(height: 20),
         ListTile(
           leading: Icon(Icons.record_voice_over),
@@ -990,7 +1082,14 @@ class _SettingsViewState extends State<SettingsView> {
           color: Theme.of(context).colorScheme.secondaryContainer,
           child: const Padding(
             padding: EdgeInsets.all(16),
-            child: Text('Edge TTS 需要网络连接。'),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline),
+                SizedBox(width: 12),
+                Expanded(child: Text('Edge TTS 需要网络连接。')),
+              ],
+            ),
           ),
         ),
       ],
@@ -1095,7 +1194,6 @@ class AboutView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -1109,14 +1207,7 @@ class AboutView extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 28,
-                        backgroundColor: scheme.primaryContainer,
-                        child: Icon(
-                          Icons.headphones_rounded,
-                          color: scheme.onPrimaryContainer,
-                        ),
-                      ),
+                      const AbooksLogo(size: 64),
                       const SizedBox(width: 16),
                       Text(
                         'Abooks Maker',
@@ -1142,7 +1233,7 @@ class AboutView extends StatelessWidget {
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(Icons.info_outline),
                     title: Text('Version'),
-                    subtitle: Text('1.0.2'),
+                    subtitle: Text('1.0.3'),
                   ),
                 ],
               ),
