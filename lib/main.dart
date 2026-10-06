@@ -91,12 +91,31 @@ class _HomePageState extends State<HomePage> {
     final settings = await _settingsRepository.load();
     final storedJobs = await _taskStore.load();
     if (!mounted) return;
+    var repairedMissingAudio = false;
+    final jobs = <ConversionJob>[];
+    for (final storedJob in storedJobs) {
+      final job = ConversionJob.fromJson(storedJob);
+      if (job == null) continue;
+      if (job.status == JobStatus.completed && !await _hasUsableAudio(job)) {
+        jobs.add(
+          job.copyWith(
+            status: JobStatus.ready,
+            detail: '音频文件缺失或不完整，可重新转换',
+            progress: 0,
+            clearAudioFiles: true,
+            clearMergedAudioFile: true,
+          ),
+        );
+        repairedMissingAudio = true;
+      } else {
+        jobs.add(job);
+      }
+    }
     setState(() {
       _settings = settings;
-      _jobs.addAll(
-        storedJobs.map(ConversionJob.fromJson).whereType<ConversionJob>(),
-      );
+      _jobs.addAll(jobs);
     });
+    if (repairedMissingAudio) await _persistJobs();
     for (final job in List<ConversionJob>.from(_jobs)) {
       if (job.status == JobStatus.running || job.status == JobStatus.paused) {
         _enqueueConversion(job, resume: true);
@@ -273,7 +292,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _convertJob(ConversionJob job, {bool resume = false}) async {
-    final index = _jobs.indexOf(job);
+    int currentIndex() => _jobs.indexWhere((item) => item.id == job.id);
+
+    final index = currentIndex();
     if (index < 0 || job.document == null) return;
     _activeJobId = job.id;
     _cancelledJobIds.remove(job.id);
@@ -302,7 +323,8 @@ class _HomePageState extends State<HomePage> {
             ? null
             : '${_settings.outputDirectory}/${_safeFileName(job.title)}',
         onProgress: (progress) {
-          if (!mounted || index >= _jobs.length) return;
+          final current = currentIndex();
+          if (!mounted || current < 0) return;
           final now = DateTime.now();
           final chapterCompleted = progress.completedFile != null;
           final updateUi =
@@ -314,8 +336,8 @@ class _HomePageState extends State<HomePage> {
                   const Duration(milliseconds: 500);
           if (!updateUi && !updateNotification) return;
           final files = chapterCompleted
-              ? [..._jobs[index].audioFiles]
-              : _jobs[index].audioFiles;
+              ? [..._jobs[current].audioFiles]
+              : _jobs[current].audioFiles;
           if (chapterCompleted &&
               !files.contains(progress.completedFile!.path)) {
             files.add(progress.completedFile!.path);
@@ -323,7 +345,7 @@ class _HomePageState extends State<HomePage> {
           if (updateUi) {
             lastUiUpdate = now;
             setState(
-              () => _jobs[index] = _jobs[index].copyWith(
+              () => _jobs[current] = _jobs[current].copyWith(
                 status: _pausedJobIds.contains(job.id)
                     ? JobStatus.paused
                     : JobStatus.running,
@@ -356,9 +378,10 @@ class _HomePageState extends State<HomePage> {
         isPaused: () => _pausedJobIds.contains(job.id),
         resumeExisting: resume && job.audioFiles.isNotEmpty,
       );
-      if (!mounted || index >= _jobs.length) return;
+      final current = currentIndex();
+      if (!mounted || current < 0) return;
       setState(
-        () => _jobs[index] = _jobs[index].copyWith(
+        () => _jobs[current] = _jobs[current].copyWith(
           status: JobStatus.completed,
           detail: '已生成 ${result.chapters.length} 个章节 MP3 和合并文件',
           progress: 1,
@@ -370,26 +393,32 @@ class _HomePageState extends State<HomePage> {
       await AndroidForegroundService.stop();
       _showMessage('转换完成，章节 MP3 和合并 MP3 已保存。');
     } on ConversionCancelled {
-      if (!mounted || index >= _jobs.length) return;
-      setState(
-        () => _jobs[index] = _jobs[index].copyWith(
-          status: JobStatus.cancelled,
-          detail: '已取消，可重新开始',
-        ),
-      );
-      await _persistJobs();
+      final current = currentIndex();
+      if (mounted && current >= 0) {
+        setState(
+          () => _jobs[current] = _jobs[current].copyWith(
+            status: JobStatus.cancelled,
+            detail: '已取消，可重新开始',
+          ),
+        );
+        await _persistJobs();
+      }
       await AndroidForegroundService.stop();
     } on Object catch (error) {
-      if (!mounted || index >= _jobs.length) return;
-      setState(
-        () => _jobs[index] = _jobs[index].copyWith(
-          status: JobStatus.failed,
-          detail: _friendlyError(error),
-        ),
-      );
-      await _persistJobs();
+      final current = currentIndex();
+      if (mounted && current >= 0) {
+        setState(
+          () => _jobs[current] = _jobs[current].copyWith(
+            status: JobStatus.failed,
+            detail: _friendlyError(error),
+          ),
+        );
+        await _persistJobs();
+      }
       await AndroidForegroundService.stop();
-      _showMessage('转换失败：${_friendlyError(error)}');
+      if (mounted && current >= 0) {
+        _showMessage('转换失败：${_friendlyError(error)}');
+      }
     } finally {
       if (_activeJobId == job.id) _activeJobId = null;
     }
@@ -406,7 +435,11 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除任务记录？'),
-        content: Text('将从任务列表中删除“${job.title}”。已生成的音频文件不会被删除。'),
+        content: Text(
+          _activeJobId == job.id
+              ? '将删除“${job.title}”任务记录并停止转换。已生成的音频文件不会被删除。'
+              : '将从任务列表中删除“${job.title}”。已生成的音频文件不会被删除。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -420,6 +453,11 @@ class _HomePageState extends State<HomePage> {
       ),
     );
     if (confirmed != true) return;
+    if (_activeJobId == job.id) {
+      _cancelledJobIds.add(job.id);
+      _pausedJobIds.remove(job.id);
+      unawaited(AndroidForegroundService.cancel());
+    }
     if (_playingJobTitle == job.title) await _stopPlayback();
     setState(() => _jobs.removeWhere((item) => item.id == job.id));
     await _persistJobs();
@@ -469,6 +507,23 @@ class _HomePageState extends State<HomePage> {
   Future<void> _togglePlayback(ConversionJob job) async {
     if (job.audioFiles.isEmpty) return;
     try {
+      if (!await _hasUsableAudio(job)) {
+        final index = _jobs.indexWhere((item) => item.id == job.id);
+        if (index >= 0) {
+          setState(
+            () => _jobs[index] = job.copyWith(
+              status: JobStatus.ready,
+              detail: '音频文件缺失或不完整，可重新转换',
+              progress: 0,
+              clearAudioFiles: true,
+              clearMergedAudioFile: true,
+            ),
+          );
+          await _persistJobs();
+        }
+        _showMessage('找不到完整音频文件，任务已恢复为可重新转换状态。');
+        return;
+      }
       if (Platform.isLinux) {
         final file = job.mergedAudioFile ?? job.audioFiles.first;
         if (_playingJobTitle == job.title && _desktopAudioProcess != null) {
@@ -498,6 +553,24 @@ class _HomePageState extends State<HomePage> {
     } on Object catch (error) {
       _showMessage('播放失败：${_friendlyError(error)}');
     }
+  }
+
+  Future<bool> _hasUsableAudio(ConversionJob job) async {
+    if (job.audioFiles.isEmpty) return false;
+    final playbackPaths = Platform.isLinux
+        ? [job.mergedAudioFile ?? job.audioFiles.first]
+        : job.audioFiles;
+    for (final path in playbackPaths) {
+      final file = File(path);
+      if (!await file.exists() || await file.length() == 0) return false;
+    }
+    if (job.mergedAudioFile case final mergedPath?) {
+      final mergedFile = File(mergedPath);
+      if (!await mergedFile.exists() || await mergedFile.length() == 0) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _stopPlayback() async {
@@ -881,38 +954,40 @@ class JobCard extends StatelessWidget {
             subtitle: job.status == JobStatus.running
                 ? null
                 : Text('${job.format} · ${job.detail}'),
-            trailing:
-                job.document != null &&
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (job.document != null &&
                     (job.status == JobStatus.ready ||
-                        job.status == JobStatus.cancelled)
-                ? OutlinedButton(
+                        job.status == JobStatus.cancelled))
+                  OutlinedButton(
                     onPressed: () => onConvert(job),
                     child: const Text('转换'),
-                  )
-                : job.status == JobStatus.running ||
+                  ),
+                if (job.status == JobStatus.running ||
+                    job.status == JobStatus.paused) ...[
+                  IconButton(
+                    tooltip: job.status == JobStatus.paused ? '继续转换' : '暂停转换',
+                    onPressed: () => onTogglePause(job),
+                    icon: Icon(
                       job.status == JobStatus.paused
-                ? Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: job.status == JobStatus.paused
-                            ? '继续转换'
-                            : '暂停转换',
-                        onPressed: () => onTogglePause(job),
-                        icon: Icon(
-                          job.status == JobStatus.paused
-                              ? Icons.play_arrow
-                              : Icons.pause,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '取消转换',
-                        onPressed: () => onCancel(job),
-                        icon: const Icon(Icons.stop_circle_outlined),
-                      ),
-                    ],
-                  )
-                : const SizedBox.shrink(),
+                          ? Icons.play_arrow
+                          : Icons.pause,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '取消转换',
+                    onPressed: () => onCancel(job),
+                    icon: const Icon(Icons.stop_circle_outlined),
+                  ),
+                ],
+                IconButton(
+                  tooltip: '删除任务',
+                  onPressed: () => onDelete(job),
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ],
+            ),
           ),
           if (job.status == JobStatus.completed && job.audioFiles.isNotEmpty)
             Padding(
@@ -930,11 +1005,6 @@ class JobCard extends StatelessWidget {
                             ? Icons.pause
                             : Icons.play_arrow,
                       ),
-                    ),
-                    IconButton(
-                      tooltip: '删除任务记录',
-                      onPressed: () => onDelete(job),
-                      icon: const Icon(Icons.delete_outline),
                     ),
                     IconButton(
                       tooltip: '打开音频文件夹',
@@ -1391,6 +1461,8 @@ class ConversionJob {
     List<String>? audioFiles,
     String? mergedAudioFile,
     double? progress,
+    bool clearAudioFiles = false,
+    bool clearMergedAudioFile = false,
   }) => ConversionJob(
     id: id,
     title: title,
@@ -1398,8 +1470,10 @@ class ConversionJob {
     status: status ?? this.status,
     detail: detail ?? this.detail,
     document: document,
-    audioFiles: audioFiles ?? this.audioFiles,
-    mergedAudioFile: mergedAudioFile ?? this.mergedAudioFile,
+    audioFiles: clearAudioFiles ? const [] : audioFiles ?? this.audioFiles,
+    mergedAudioFile: clearMergedAudioFile
+        ? null
+        : mergedAudioFile ?? this.mergedAudioFile,
     progress: progress ?? this.progress,
   );
 }

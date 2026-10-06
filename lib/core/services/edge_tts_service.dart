@@ -304,9 +304,6 @@ class EdgeTtsService {
     final audioBuilder = BytesBuilder(copy: false);
     var audioBytes = 0;
     var reportedTextCharacters = 0;
-    var lastAudioBytes = 0;
-    var lastAudioAt = DateTime.now();
-    DateTime? nearCompleteAt;
     try {
       await for (final event in communicator.stream().timeout(
         const Duration(seconds: 45),
@@ -318,8 +315,6 @@ class EdgeTtsService {
         if (event is AudioDataEvent) {
           audioBuilder.add(event.data);
           audioBytes += event.data.length;
-          lastAudioBytes = audioBytes;
-          lastAudioAt = DateTime.now();
         } else if (event is SentenceBoundaryEvent) {
           // Kept for compatibility if the TTS client emits metadata despite
           // the setting; normal mobile conversions use byte-based progress.
@@ -328,27 +323,12 @@ class EdgeTtsService {
         final textFraction = chapter.text.isEmpty
             ? 0.0
             : reportedTextCharacters / chapter.text.length;
-        final byteFraction =
-            audioBytes / (chapter.text.length * 30).clamp(1, double.infinity);
-        if (byteFraction >= 0.98) {
-          nearCompleteAt ??= DateTime.now();
-        }
-        if (audioBytes > 0 &&
-            audioBytes == lastAudioBytes &&
-            byteFraction >= 0.95 &&
-            DateTime.now().difference(lastAudioAt) >=
-                const Duration(seconds: 10)) {
-          // Some Edge TTS responses keep sending empty metadata frames after
-          // the final audio packet and never deliver turn.end.
-          break;
-        }
-        if (nearCompleteAt != null &&
-            DateTime.now().difference(nearCompleteAt) >=
-                const Duration(seconds: 10)) {
-          // The service can continue sending trailing packets without a
-          // turn.end event after the expected audio volume is complete.
-          break;
-        }
+        // Audio size is not a reliable measure of text completion: speech
+        // duration, codec framing, and punctuation all change the byte ratio.
+        // In particular, a rough bytes-per-character estimate can reach its
+        // target near the start of a long chapter. Only turn.end (the normal
+        // end of this stream) confirms that every text chunk was synthesized.
+        final byteFraction = audioBytes / (chapter.text.length * 1200);
         onFraction(
           (reportedTextCharacters > 0 ? textFraction : byteFraction).clamp(
             0.0,
@@ -357,13 +337,16 @@ class EdgeTtsService {
         );
       }
     } on TimeoutException {
-      // Edge TTS occasionally omits turn.end after delivering the final audio
-      // packets. Do not retry a nearly complete chapter forever in that case.
-      final estimatedFraction =
-          audioBytes / (chapter.text.length * 30).clamp(1, double.infinity);
-      if (audioBytes == 0 || estimatedFraction < 0.95) rethrow;
+      // A quiet connection is not proof that the chapter finished. Treat it
+      // as a failed synthesis so the task cannot report truncated audio as
+      // successful.
+      rethrow;
     }
-    return audioBuilder.takeBytes();
+    final audio = audioBuilder.takeBytes();
+    if (audio.isEmpty) {
+      throw StateError('Edge TTS 没有为“${chapter.title}”返回音频');
+    }
+    return audio;
   }
 
   bool _isRateLimited(Object error) {
